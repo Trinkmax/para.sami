@@ -685,34 +685,34 @@ const CONFIG = {
 
   // Cada flor = un recuerdo (contado como chiste). game = mini-juego opcional. video = id de YouTube.
   flowers: [
-    { x: 32, y: 16, size: 78, palette: "rosa",
+    { x: 38, y: 16, size: 78, palette: "rosa",
       title: "Mostro y Mostra",
       body: "Antes de entender nada de la vida ya éramos Mostro y Mostra. Dos nombres espantosos que elegimos solos, sin que nadie nos obligue. Ahí ya se veía venir el criterio que íbamos a tener." },
 
-    { x: 66, y: 25, size: 70, palette: "magenta",
+    { x: 62, y: 24, size: 70, palette: "magenta",
       title: "Sahumerio",
       body: "Te puse Sahumerio. ¿Por qué? Ni idea, en mi cabeza tenía toda la lógica del mundo. Y por culpa de este video terminamos siendo Gordito y Gordita. <span class=\"soft\">Pruebas en mi contra 👇</span>",
       video: "R7UySRqKGLo" },
 
-    { x: 36, y: 35, size: 84, palette: "coral",
+    { x: 44, y: 34, size: 84, palette: "coral",
       title: "Bicho, Bichito",
       body: "Y antes de que te hagas la inocente: vos me decías Bicho. Bichito. Por ESTO 👇. Así que la dignidad la perdimos los dos, que quede bien claro.",
       video: "vaveNo64abE" },
 
-    { x: 70, y: 44, size: 66, palette: "lavender",
+    { x: 66, y: 45, size: 66, palette: "lavender",
       title: "El kiosco rojo",
       body: "Lugar que elegí para pedirte que seas mi novia: un kiosco. Rojo. 19:24. No una playa, no un atardecer (ese te lo hago recién ahora, mirá el fondo). Un kiosco. Y dijiste que sí igual. Un 14, obvio, porque los 14 eran nuestros." },
 
-    { x: 30, y: 54, size: 74, palette: "peach",
+    { x: 38, y: 54, size: 74, palette: "peach",
       title: "Tema pendiente: la sopa",
       body: "Cocinábamos como dioses: smash burgers tremendas, lasaña, pizza casera CON FORMA DE CORAZÓN (idea tuya, que conste en actas). Todo perfecto. Hasta que aparece la palabra con S.",
       game: "sopa" },
 
-    { x: 63, y: 62, size: 80, palette: "hotpink",
+    { x: 60, y: 63, size: 80, palette: "hotpink",
       title: "Tus flores",
       body: "Te regalaba flores. Era mi estrategia comercial: una flor bien puesta tapaba cualquier macana. Funcionaba siempre. Acá tenés un jardín entero, por si quedó alguna macana sin tapar." },
 
-    { x: 40, y: 72, size: 72, palette: "blush",
+    { x: 46, y: 73, size: 72, palette: "blush",
       title: "Nuestra banda",
       body: "Yo arruinando un ukelele, vos cantando para tapar mis errores. Dale, tocá vos ahora, a ver si lo hacés mejor 👇",
       game: "ukelele" },
@@ -901,6 +901,19 @@ function setSongProgress(level){
   }
 }
 
+// baja la canción suavemente (sin tocar el master, así el ukelele se sigue escuchando)
+function pauseSong(on){
+  if (!actx || !songLoaded) return;
+  const t = actx.currentTime;
+  if (on){
+    const ramp = (g) => { g.gain.cancelScheduledValues(t); g.gain.linearRampToValueAtTime(0.0001, t + 0.9); };
+    if (usingStems) STEM_ORDER.forEach((n) => stems[n] && ramp(stems[n].gain));
+    else if (songFull) ramp(songFull.gain);
+  } else {
+    setSongProgress(currentProgress());
+  }
+}
+
 function note(freq, t0, dur, peak, type){
   if (!actx || muted) return;
   const o = actx.createOscillator();
@@ -1036,13 +1049,14 @@ $("#mute").addEventListener("click", () => {
 
 /* =========================== INTERACCIÓN =========================== */
 const card = $("#card"), scrim = $("#scrim");
-let cardOpen = false, activeVideo = false;
+let cardOpen = false, activeVideo = false, activeUke = false;
 
 function openFlower(btn, data, idx){
   if (!btn.classList.contains("open")){
     btn.classList.add("open");
     const order = bloomedOrder.length;
     bloomedOrder.push({ x: data.x, y: data.y });
+    if (bloomedOrder.length >= 2) drawSegment(bloomedOrder[bloomedOrder.length - 2], bloomedOrder[bloomedOrder.length - 1]);
     playPluck(order);
     setSongProgress(bloomedOrder.length / TOTAL);
     if (navigator.vibrate) try{ navigator.vibrate(12); }catch(e){}
@@ -1067,7 +1081,7 @@ function showCard(data){
     duck(true);
   }
   if (data.game === "sopa") buildSopa($("#cardBody"));
-  if (data.game === "ukelele") buildUke($("#cardBody"));
+  if (data.game === "ukelele"){ buildUke($("#cardBody")); activeUke = true; pauseSong(true); }
   cardOpen = true;
   scrim.classList.add("show");
   requestAnimationFrame(() => card.classList.add("up"));
@@ -1078,6 +1092,7 @@ function hideCard(){
   scrim.classList.remove("show");
   cardOpen = false;
   if (activeVideo){ duck(false); activeVideo = false; }
+  if (activeUke){ pauseSong(false); activeUke = false; }
   setTimeout(() => {
     card.querySelectorAll(".video-wrap, .sopa, .uke").forEach((el) => el.remove());
     if (bloomedOrder.length === TOTAL) goFinale();
@@ -1140,31 +1155,30 @@ function buildUke(parent){
   });
 }
 
-/* sendero que une las flores en orden (1 → 7) */
+/* sendero: se va dibujando a medida que se abren las flores */
 const vines = $("#vines");
-vines.insertAdjacentHTML("afterbegin",
-  `<defs><linearGradient id="vineGrad" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ff9ec2" stop-opacity="0.55"/>
-    <stop offset="1" stop-color="#ffd0a8" stop-opacity="0.8"/>
-  </linearGradient></defs>`);
-(function buildGuide(){
-  const pts = CONFIG.flowers.map((f) => ({ x: f.x, y: f.y }));
-  let d = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", d);
-  path.setAttribute("fill", "none");
-  path.setAttribute("stroke", "url(#vineGrad)");
-  path.setAttribute("stroke-width", "1.5");
-  path.setAttribute("stroke-linecap", "round");
-  path.setAttribute("stroke-linejoin", "round");
-  path.setAttribute("vector-effect", "non-scaling-stroke");
-  path.style.filter = "drop-shadow(0 0 3px rgba(255,160,205,0.65))";
-  path.style.opacity = "0";
-  path.style.transition = "opacity 1.3s ease";
-  vines.appendChild(path);
-  requestAnimationFrame(() => { path.style.opacity = "0.8"; });
-})();
+function drawSegment(a, b){
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  const cx = mx - dy * 0.1, cy = my + dx * 0.1; // leve comba para que se sienta orgánico
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", `M ${a.x} ${a.y} Q ${cx.toFixed(2)} ${cy.toFixed(2)} ${b.x} ${b.y}`);
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", "#ffd2e8");
+  p.setAttribute("stroke-width", "1.7");
+  p.setAttribute("stroke-linecap", "round");
+  p.setAttribute("vector-effect", "non-scaling-stroke");
+  p.setAttribute("pathLength", "1");
+  p.style.filter = "drop-shadow(0 0 5px rgba(255,150,200,0.95))";
+  p.style.opacity = "0.92";
+  vines.appendChild(p);
+  if (!REDUCE){
+    p.style.strokeDasharray = "1";
+    p.style.strokeDashoffset = "1";
+    p.style.transition = "stroke-dashoffset 0.85s cubic-bezier(0.16,1,0.3,1)";
+    requestAnimationFrame(() => { p.style.strokeDashoffset = "0"; });
+  }
+}
 
 /* =========================== ARRANQUE =========================== */
 function start(){
