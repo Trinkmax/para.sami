@@ -569,7 +569,8 @@ canvas#petals{ width: 100%; height: 100%; display: block; }
 
 .sopa{ margin-top: 18px; }
 .sopa-q{ font-family: var(--display); font-style: italic; font-size: 1.18rem; color: var(--ink); margin-bottom: 16px; }
-.sopa-row{ position: relative; display: flex; justify-content: center; align-items: center; gap: 16px; min-height: 60px; }
+.sopa-field{ position: relative; height: 172px; margin-top: 6px; display: grid; place-items: center; overflow: hidden; touch-action: none; }
+.sopa-field .sopa-no{ position: relative; z-index: 1; }
 .sopa-no{
   font-family: var(--body); font-weight: 600; font-size: 1.2rem;
   color: oklch(0.18 0.04 330);
@@ -581,11 +582,15 @@ canvas#petals{ width: 100%; height: 100%; display: block; }
 .sopa-no:hover{ transform: scale(1.06); }
 .sopa-no:active{ transform: scale(0.94); }
 .sopa-si{
-  font-family: var(--body); font-size: 0.82rem; color: var(--ink-mute);
-  background: oklch(0.85 0.06 350 / 0.12); border: 1px solid var(--card-brd);
-  padding: 6px 15px; border-radius: 100px; cursor: pointer;
-  transition: transform 0.16s var(--e-quart);
+  position: absolute; left: 0; top: 0; z-index: 2;
+  font-family: var(--body); font-size: 0.86rem; color: var(--ink-mute);
+  background: oklch(0.85 0.06 350 / 0.14); border: 1px solid var(--card-brd);
+  padding: 7px 16px; border-radius: 100px; cursor: pointer;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+  will-change: left, top, transform;
+  transition: left 0.26s cubic-bezier(0.34,1.56,0.64,1), top 0.26s cubic-bezier(0.34,1.56,0.64,1), transform 0.22s var(--e-quart);
 }
+.sopa-tip{ margin-top: 10px; font-size: 0.8rem; color: var(--ink-mute); font-style: italic; text-wrap: balance; }
 .sopa-win{ font-family: var(--display); font-size: 1.22rem; color: var(--ink); line-height: 1.45; }
 .sopa-win span{ font-size: 0.96rem; color: var(--ink-soft); font-style: italic; }
 
@@ -618,7 +623,7 @@ canvas#petals{ width: 100%; height: 100%; display: block; }
   <div id="stage">
     <div id="twinkles" class="layer"></div>
     <canvas id="petals" class="layer"></canvas>
-    <svg id="vines" class="layer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+    <svg id="vines" class="layer"></svg>
     <div id="flowers" class="layer"></div>
   </div>
 
@@ -901,14 +906,25 @@ function setSongProgress(level){
   }
 }
 
-// baja la canción suavemente (sin tocar el master, así el ukelele se sigue escuchando)
+// durante el ukelele baja el VOLUMEN de la base (no la corta, no toca el master).
+// la voz NO entra todavía; entra al cerrar la tarjeta (setSongProgress sube todo).
 function pauseSong(on){
   if (!actx || !songLoaded) return;
   const t = actx.currentTime;
   if (on){
-    const ramp = (g) => { g.gain.cancelScheduledValues(t); g.gain.linearRampToValueAtTime(0.0001, t + 0.9); };
-    if (usingStems) STEM_ORDER.forEach((n) => stems[n] && ramp(stems[n].gain));
-    else if (songFull) ramp(songFull.gain);
+    const level = currentProgress();
+    const DUCK = 0.18;
+    if (usingStems){
+      STEM_ORDER.forEach((n) => {
+        if (!stems[n]) return;
+        const tgt = (n !== "vocals" && level >= STEM_STOP[n]) ? STEM_GAIN[n] * DUCK : 0.0001;
+        stems[n].gain.cancelScheduledValues(t);
+        stems[n].gain.gain.linearRampToValueAtTime(tgt, t + 0.9);
+      });
+    } else if (songFull){
+      songFull.gain.gain.cancelScheduledValues(t);
+      songFull.gain.gain.linearRampToValueAtTime(0.08, t + 0.9);
+    }
   } else {
     setSongProgress(currentProgress());
   }
@@ -931,16 +947,74 @@ function note(freq, t0, dur, peak, type){
   o.stop(t + dur + 0.06);
 }
 
+/* ---- cuerda real (Karplus-Strong): modelado físico de cuerda pulsada ----
+   ruido suavizado + línea de retardo con filtro promediador = timbre de nylon
+   (ukelele/guitarra criolla), mucho más real que un oscilador. */
+const ksCache = new Map();
+function ksBuffer(freq, seconds, decay, variant){
+  const sr = actx.sampleRate;
+  const key = Math.round(freq) + ":" + seconds + ":" + decay + ":" + variant;
+  if (ksCache.has(key)) return ksCache.get(key);
+  const N = Math.max(2, Math.round(sr / freq));          // largo de la cuerda → afina el tono
+  const len = Math.max(N + 1, Math.floor(sr * seconds));
+  const buf = actx.createBuffer(1, len, sr);
+  const out = buf.getChannelData(0);
+  const ring = new Float32Array(N);
+  // excitación: ruido apenas filtrado = el "pulsado" del dedo sobre el nylon
+  let lp = 0, mx = 1e-6;
+  for (let i = 0; i < N; i++){
+    const wn = Math.random() * 2 - 1;
+    lp = lp * 0.6 + wn * 0.4;
+    ring[i] = lp;
+    if (Math.abs(ring[i]) > mx) mx = Math.abs(ring[i]);
+  }
+  for (let i = 0; i < N; i++) ring[i] /= mx;             // normalizo la excitación
+  // bucle K-S: cada vuelta (un período) pierde un poco de energía → la nota decae
+  let idx = 0;
+  for (let i = 0; i < len; i++){
+    const cur = ring[idx];
+    const nxt = ring[(idx + 1) % N];
+    out[i] = cur;
+    ring[idx] = (cur + nxt) * 0.5 * decay;
+    idx = (idx + 1) % N;
+  }
+  // envolvente: ataque cortito y cola que se apaga (sin clicks)
+  const fi = Math.min(len, (sr * 0.004) | 0) || 1;
+  for (let i = 0; i < fi; i++) out[i] *= i / fi;
+  const fo = Math.min(len, (sr * 0.12) | 0) || 1;
+  for (let i = 0; i < fo; i++) out[len - 1 - i] *= i / fo;
+  ksCache.set(key, buf);
+  return buf;
+}
+
+function pluckString(freq, opt){
+  if (!actx || muted) return;
+  opt = opt || {};
+  try{
+    const seconds = opt.seconds || 1.9;
+    const decay = opt.decay || 0.9955;
+    const buf = ksBuffer(freq, seconds, decay, (Math.random() * 3) | 0);  // 3 variantes → no suena calcado
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const hp = actx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 90;
+    const body = actx.createBiquadFilter(); body.type = "peaking"; body.frequency.value = 300; body.Q.value = 0.8; body.gain.value = 3.5;  // caja del uke
+    const air = actx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = 2600; air.gain.value = 2.5;                        // brillo del nylon
+    const g = actx.createGain(); g.gain.value = opt.gain || 0.5;
+    src.connect(hp); hp.connect(body); body.connect(air); air.connect(g); g.connect(master);
+    if (master._delay){ const sd = actx.createGain(); sd.gain.value = 0.12; g.connect(sd); sd.connect(master._delay); }
+    src.start();
+    src.stop(actx.currentTime + seconds + 0.05);
+  }catch(e){
+    note(freq, 0, 1.6, 0.42, "triangle");   // por si algo falla, no se queda mudo
+  }
+}
+
 function playPluck(i){
   const f = PLUCK[Math.min(i, PLUCK.length - 1)];
-  note(f, 0, 1.6, 0.42, "triangle");
-  note(f * 2, 0, 0.7, 0.1, "sine");
+  pluckString(f, { gain: 0.42, seconds: 1.7, decay: 0.9952 });
 }
 
 function playUke(freq){
-  note(freq, 0, 1.9, 0.5, "triangle");
-  note(freq * 2, 0, 0.8, 0.14, "sine");
-  note(freq * 3, 0, 0.4, 0.05, "sine");
+  pluckString(freq, { gain: 0.55, seconds: 2.1, decay: 0.9966 });
 }
 
 function duck(on){
@@ -1024,6 +1098,7 @@ $("#mute").addEventListener("click", () => {
   const layers = [
     { el: $("#twinkles"), d: 6 },
     { el: $("#petals"), d: 10 },
+    { el: $("#vines"), d: 16 },     // las lianas se mueven EXACTO con las flores
     { el: $("#flowers"), d: 16 },
   ];
   let tx = 0, ty = 0, cx = 0, cy = 0;
@@ -1058,7 +1133,7 @@ function openFlower(btn, data, idx){
     bloomedOrder.push({ x: data.x, y: data.y });
     if (bloomedOrder.length >= 2) drawSegment(bloomedOrder[bloomedOrder.length - 2], bloomedOrder[bloomedOrder.length - 1]);
     playPluck(order);
-    setSongProgress(bloomedOrder.length / TOTAL);
+    if (data.game !== "ukelele") setSongProgress(bloomedOrder.length / TOTAL); // en el uke la voz no entra todavía
     if (navigator.vibrate) try{ navigator.vibrate(12); }catch(e){}
     $$(".pip")[idx] && $$(".pip")[idx].classList.add("on");
     $("#hint").classList.remove("show");
@@ -1102,32 +1177,89 @@ function hideCard(){
 $("#cardNext").addEventListener("click", hideCard);
 scrim.addEventListener("click", hideCard);
 
-/* ----- mini-juego: la sopa (el "sí" se escapa) ----- */
+/* ----- mini-juego: la sopa (el "sí" se escapa y NO se deja tocar) ----- */
 function buildSopa(parent){
   const w = document.createElement("div");
   w.className = "sopa";
   w.innerHTML =
     '<p class="sopa-q">¿comemos sopa?</p>' +
-    '<div class="sopa-row"><button type="button" class="sopa-no">NO</button>' +
-    '<button type="button" class="sopa-si">sí</button></div>';
+    '<div class="sopa-field">' +
+      '<button type="button" class="sopa-no">NO</button>' +
+      '<button type="button" class="sopa-si">sí</button>' +
+    '</div>' +
+    '<p class="sopa-tip">(dale, intentá tocar el “sí”… suerte con eso 😏)</p>';
   parent.appendChild(w);
+
+  const field = w.querySelector(".sopa-field");
   const si = w.querySelector(".sopa-si");
   const no = w.querySelector(".sopa-no");
-  const dodge = (e) => {
-    if (e) e.preventDefault();
-    const dx = (Math.random() * 2 - 1) * 130;
-    const dy = (Math.random() * 2 - 1) * 54;
-    si.style.transform = `translate(${dx.toFixed(0)}px, ${dy.toFixed(0)}px) rotate(${(Math.random() * 30 - 15) | 0}deg)`;
+
+  const place = (x, y) => { si.style.left = x + "px"; si.style.top = y + "px"; };
+
+  // posición inicial: arriba a la derecha del campo, lejos del NO
+  function init(){
+    if (!si.isConnected) return;
+    const fb = field.getBoundingClientRect();
+    place(Math.max(6, fb.width - si.offsetWidth - 10), 8);
+  }
+
+  // salta a un lugar lejos del dedo y NUNCA encima/detrás del NO, sin salir del campo
+  function flee(clientX, clientY){
+    const fb = field.getBoundingClientRect();
+    const sw = si.offsetWidth, sh = si.offsetHeight, pad = 6;
+    const maxX = Math.max(pad, fb.width - sw - pad);
+    const maxY = Math.max(pad, fb.height - sh - pad);
+    const px = (clientX || 0) - fb.left, py = (clientY || 0) - fb.top;
+    const nb = no.getBoundingClientRect();
+    const nox = nb.left + nb.width / 2 - fb.left;
+    const noy = nb.top + nb.height / 2 - fb.top;
+    const minNo = nb.width / 2 + sw / 2 + 14;
+    let best = null, bestD = -1;
+    for (let i = 0; i < 18; i++){
+      const x = pad + Math.random() * (maxX - pad);
+      const y = pad + Math.random() * (maxY - pad);
+      const ccx = x + sw / 2, ccy = y + sh / 2;
+      if (Math.hypot(ccx - nox, ccy - noy) < minNo) continue;     // jamás detrás del NO
+      const d = Math.hypot(ccx - px, ccy - py);                    // lo más lejos posible del dedo
+      if (d > bestD){ bestD = d; best = { x, y }; }
+    }
+    if (!best) best = { x: Math.random() * maxX, y: Math.random() * maxY };
+    place(best.x, best.y);
+    si.style.transform = `rotate(${(Math.random() * 22 - 11) | 0}deg)`;
+    if (navigator.vibrate) try{ navigator.vibrate(5); }catch(_){}
+  }
+
+  // PERSEGUIR: apenas el puntero/dedo se acerca, el "sí" se dispara
+  const RADIUS = 72;
+  function chase(e){
+    if (!si.isConnected){ card.removeEventListener("pointermove", chase); return; }
+    const r = si.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if (Math.hypot(e.clientX - cx, e.clientY - cy) < RADIUS) flee(e.clientX, e.clientY);
+  }
+  card.addEventListener("pointermove", chase);
+
+  // tap/click directo: igual se escapa y nunca cuenta como tocado
+  const bolt = (e) => {
+    e.preventDefault();
+    const t = e.touches && e.touches[0];
+    flee(e.clientX != null ? e.clientX : (t ? t.clientX : 0),
+         e.clientY != null ? e.clientY : (t ? t.clientY : 0));
   };
-  ["pointerenter", "pointerdown", "touchstart", "mouseover"].forEach((ev) =>
-    si.addEventListener(ev, dodge, { passive: false }));
-  si.addEventListener("click", dodge);
+  ["pointerdown", "pointerenter", "touchstart"].forEach((ev) =>
+    si.addEventListener(ev, bolt, { passive: false }));
+  si.addEventListener("click", (e) => e.preventDefault());
+
   no.addEventListener("click", () => {
+    card.removeEventListener("pointermove", chase);
     w.innerHTML = '<p class="sopa-win">respuesta correcta ✅<br><span>la relación sigue en pie.</span></p>';
     if (navigator.vibrate) try{ navigator.vibrate(18); }catch(_){}
     note(659.25, 0, 0.5, 0.4, "triangle");
     note(880.0, 0.09, 0.6, 0.38, "triangle");
   });
+
+  requestAnimationFrame(init);
+  window.addEventListener("resize", init);
 }
 
 /* ----- mini-juego: ukelele jugable ----- */
@@ -1155,30 +1287,53 @@ function buildUke(parent){
   });
 }
 
-/* sendero: se va dibujando a medida que se abren las flores */
+/* sendero: línea que une las flores (nodos) en el ORDEN en que se abren.
+   Se dibuja en píxeles reales del lienzo → las curvas no se deforman y los
+   extremos caen exactamente en el centro de cada flor. */
 const vines = $("#vines");
-function drawSegment(a, b){
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-  const cx = mx - dy * 0.1, cy = my + dx * 0.1; // leve comba para que se sienta orgánico
-  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  p.setAttribute("d", `M ${a.x} ${a.y} Q ${cx.toFixed(2)} ${cy.toFixed(2)} ${b.x} ${b.y}`);
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function vinePoint(p){
+  // p.x / p.y vienen en porcentaje (0..100) → los paso a píxeles del lienzo
+  return { x: p.x / 100 * vines.clientWidth, y: p.y / 100 * vines.clientHeight };
+}
+function segPath(a, b){
+  const pa = vinePoint(a), pb = vinePoint(b);
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+  // comba suave perpendicular al tramo (en píxeles → se ve orgánica y pareja)
+  const off = Math.min(len * 0.14, 30);
+  const cx = mx + (-dy / len) * off;
+  const cy = my + ( dx / len) * off;
+  return `M ${pa.x.toFixed(1)} ${pa.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${pb.x.toFixed(1)} ${pb.y.toFixed(1)}`;
+}
+function makeVine(a, b, animate){
+  const p = document.createElementNS(SVGNS, "path");
+  p.setAttribute("d", segPath(a, b));
   p.setAttribute("fill", "none");
   p.setAttribute("stroke", "#ffd2e8");
-  p.setAttribute("stroke-width", "1.7");
+  p.setAttribute("stroke-width", "2");
   p.setAttribute("stroke-linecap", "round");
-  p.setAttribute("vector-effect", "non-scaling-stroke");
-  p.setAttribute("pathLength", "1");
   p.style.filter = "drop-shadow(0 0 5px rgba(255,150,200,0.95))";
   p.style.opacity = "0.92";
   vines.appendChild(p);
-  if (!REDUCE){
-    p.style.strokeDasharray = "1";
-    p.style.strokeDashoffset = "1";
+  if (!REDUCE && animate){
+    const L = p.getTotalLength();
+    p.style.strokeDasharray = L;
+    p.style.strokeDashoffset = L;
     p.style.transition = "stroke-dashoffset 0.85s cubic-bezier(0.16,1,0.3,1)";
     requestAnimationFrame(() => { p.style.strokeDashoffset = "0"; });
   }
+  return p;
 }
+function drawSegment(a, b){ makeVine(a, b, true); }
+function redrawVines(){
+  while (vines.firstChild) vines.removeChild(vines.firstChild);
+  for (let i = 1; i < bloomedOrder.length; i++) makeVine(bloomedOrder[i - 1], bloomedOrder[i], false);
+}
+let vineRT;
+window.addEventListener("resize", () => { clearTimeout(vineRT); vineRT = setTimeout(redrawVines, 120); });
 
 /* =========================== ARRANQUE =========================== */
 function start(){
