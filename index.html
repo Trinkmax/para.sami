@@ -199,6 +199,22 @@ canvas#petals{ width: 100%; height: 100%; display: block; }
   transition-delay: 0.32s;
 }
 .flower.open .core{ transform: translate(-50%, -50%) scale(1); }
+.flower .num{
+  position: absolute; left: 50%; top: 0;
+  transform: translate(-50%, -118%);
+  min-width: 21px; height: 21px; padding: 0 6px;
+  display: grid; place-items: center;
+  font-family: var(--body); font-weight: 600; font-size: 0.74rem;
+  color: var(--ink);
+  background: oklch(0.20 0.06 326 / 0.55);
+  border: 1px solid var(--card-brd);
+  border-radius: 100px;
+  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  box-shadow: 0 0 12px oklch(0.72 0.16 350 / 0.5);
+  pointer-events: none;
+  transition: opacity 0.45s var(--e-quart), transform 0.45s var(--e-bloom);
+}
+.flower.open .num{ opacity: 0; transform: translate(-50%, -150%) scale(0.7); }
 
 /* ============================ UI SUPERPUESTA ============================ */
 #ui{ position: absolute; inset: 0; z-index: var(--z-ui); pointer-events: none; }
@@ -669,36 +685,36 @@ const CONFIG = {
 
   // Cada flor = un recuerdo (contado como chiste). game = mini-juego opcional. video = id de YouTube.
   flowers: [
-    { x: 24, y: 27, size: 78, palette: "rosa",
+    { x: 32, y: 16, size: 78, palette: "rosa",
       title: "Mostro y Mostra",
       body: "Antes de entender nada de la vida ya éramos Mostro y Mostra. Dos nombres espantosos que elegimos solos, sin que nadie nos obligue. Ahí ya se veía venir el criterio que íbamos a tener." },
 
-    { x: 70, y: 21, size: 70, palette: "magenta",
+    { x: 66, y: 25, size: 70, palette: "magenta",
       title: "Sahumerio",
       body: "Te puse Sahumerio. ¿Por qué? Ni idea, en mi cabeza tenía toda la lógica del mundo. Y por culpa de este video terminamos siendo Gordito y Gordita. <span class=\"soft\">Pruebas en mi contra 👇</span>",
       video: "R7UySRqKGLo" },
 
-    { x: 45, y: 37, size: 84, palette: "coral",
+    { x: 36, y: 35, size: 84, palette: "coral",
       title: "Bicho, Bichito",
       body: "Y antes de que te hagas la inocente: vos me decías Bicho. Bichito. Por ESTO 👇. Así que la dignidad la perdimos los dos, que quede bien claro.",
       video: "vaveNo64abE" },
 
-    { x: 80, y: 45, size: 66, palette: "lavender",
+    { x: 70, y: 44, size: 66, palette: "lavender",
       title: "El kiosco rojo",
       body: "Lugar que elegí para pedirte que seas mi novia: un kiosco. Rojo. 19:24. No una playa, no un atardecer (ese te lo hago recién ahora, mirá el fondo). Un kiosco. Y dijiste que sí igual. Un 14, obvio, porque los 14 eran nuestros." },
 
-    { x: 17, y: 52, size: 74, palette: "peach",
+    { x: 30, y: 54, size: 74, palette: "peach",
       title: "Tema pendiente: la sopa",
       body: "Cocinábamos como dioses: smash burgers tremendas, lasaña, pizza casera CON FORMA DE CORAZÓN (idea tuya, que conste en actas). Todo perfecto. Hasta que aparece la palabra con S.",
       game: "sopa" },
 
-    { x: 59, y: 59, size: 80, palette: "hotpink",
+    { x: 63, y: 62, size: 80, palette: "hotpink",
       title: "Tus flores",
-      body: "Te regalaba flores todo el tiempo. Era mi estrategia comercial: una flor bien puesta tapaba cualquier macana. Funcionaba siempre. Acá tenés un jardín entero, por si quedó alguna macana sin tapar." },
+      body: "Te regalaba flores. Era mi estrategia comercial: una flor bien puesta tapaba cualquier macana. Funcionaba siempre. Acá tenés un jardín entero, por si quedó alguna macana sin tapar." },
 
-    { x: 37, y: 67, size: 72, palette: "blush",
+    { x: 40, y: 72, size: 72, palette: "blush",
       title: "Nuestra banda",
-      body: "Yo arruinando un ukelele, vos cantando para tapar mis errores. <em>I Don't Wanna Miss a Thing</em>, <em>All of Me</em>, <em>Carta para no llorar</em>. Dale, tocá vos ahora, a ver si lo hacés mejor 👇",
+      body: "Yo arruinando un ukelele, vos cantando para tapar mis errores. Dale, tocá vos ahora, a ver si lo hacés mejor 👇",
       game: "ukelele" },
   ],
 
@@ -788,6 +804,7 @@ CONFIG.flowers.forEach((f, idx) => {
     `<span class="petals">${petals}</span>` +
     `<span class="bud"></span>` +
     `<span class="core"></span>` +
+    `<span class="num">${idx + 1}</span>` +
     `<span class="tap"></span>`;
 
   btn.addEventListener("click", () => openFlower(btn, f, idx));
@@ -1029,7 +1046,6 @@ function openFlower(btn, data, idx){
     playPluck(order);
     setSongProgress(bloomedOrder.length / TOTAL);
     if (navigator.vibrate) try{ navigator.vibrate(12); }catch(e){}
-    drawVine();
     $$(".pip")[idx] && $$(".pip")[idx].classList.add("on");
     $("#hint").classList.remove("show");
   }
@@ -1124,37 +1140,31 @@ function buildUke(parent){
   });
 }
 
-/* enredadera que une las flores */
+/* sendero que une las flores en orden (1 → 7) */
 const vines = $("#vines");
-function drawVine(){
-  if (bloomedOrder.length < 2) return;
-  const a = bloomedOrder[bloomedOrder.length - 2];
-  const b = bloomedOrder[bloomedOrder.length - 1];
-  const mx = (a.x + b.x) / 2 + (Math.random() * 10 - 5);
-  const my = (a.y + b.y) / 2 + (Math.random() * 8 - 4);
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`);
-  path.setAttribute("fill", "none");
-  path.setAttribute("stroke", "url(#vineGrad)");
-  path.setAttribute("stroke-width", "1.1");
-  path.setAttribute("stroke-linecap", "round");
-  path.setAttribute("vector-effect", "non-scaling-stroke");
-  path.style.filter = "drop-shadow(0 0 3px rgba(255,150,200,0.7))";
-  if (!REDUCE){
-    const len = Math.hypot(b.x - a.x, b.y - a.y) * 1.6;
-    path.style.strokeDasharray = len;
-    path.style.strokeDashoffset = len;
-    path.style.transition = "stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)";
-    requestAnimationFrame(() => { path.style.strokeDashoffset = "0"; });
-  }
-  vines.appendChild(path);
-}
-// gradiente de la enredadera
 vines.insertAdjacentHTML("afterbegin",
   `<defs><linearGradient id="vineGrad" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ff9ec2" stop-opacity="0.35"/>
-    <stop offset="1" stop-color="#ffd0a8" stop-opacity="0.7"/>
+    <stop offset="0" stop-color="#ff9ec2" stop-opacity="0.55"/>
+    <stop offset="1" stop-color="#ffd0a8" stop-opacity="0.8"/>
   </linearGradient></defs>`);
+(function buildGuide(){
+  const pts = CONFIG.flowers.map((f) => ({ x: f.x, y: f.y }));
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "url(#vineGrad)");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+  path.style.filter = "drop-shadow(0 0 3px rgba(255,160,205,0.65))";
+  path.style.opacity = "0";
+  path.style.transition = "opacity 1.3s ease";
+  vines.appendChild(path);
+  requestAnimationFrame(() => { path.style.opacity = "0.8"; });
+})();
 
 /* =========================== ARRANQUE =========================== */
 function start(){
